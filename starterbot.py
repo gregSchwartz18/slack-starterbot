@@ -2,7 +2,17 @@ import os
 import time
 import re
 from slackclient import SlackClient
+from apiclient.discovery import build
+from oauth2client.service_account import ServiceAccountCredentials
+from googleapiclient.errors import HttpError
 
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pylab as pl
+import matplotlib.lines as ln
+import matplotlib.pyplot as plt
+import textwrap
 
 # instantiate Slack client
 slack_client = SlackClient(os.environ.get('SLACK_BOT_TOKEN'))
@@ -36,25 +46,112 @@ def parse_direct_mention(message_text):
     # the first group contains the username, the second group contains the remaining message
     return (matches.group(1), matches.group(2).strip()) if matches else (None, None)
 
+def count(metric, command):
+    SDate = "7daysAgo"
+    EDate = "today"
+    words = command.split(' ')
+    if 'from' in command:
+        pos = words.index('from')
+        SDate = command.split()[pos+1]
+    if 'to' in command:
+        pos = words.index('to')
+        EDate = command.split()[pos+1]
+    analytics = initialize_analyticsreporting()
+    response = analytics.reports().batchGet(
+        body={
+            'reportRequests': [
+            {
+                'viewId': VIEW_ID,
+                'dateRanges': [{'startDate': SDate, 'endDate': EDate}],
+                'metrics': [{'expression': 'ga:{}'.format(metric)}]
+            }]
+        }
+    ).execute()
+    answer = response['reports'][0]['data']['totals'][0]['values'][0]
+    return answer
+
+def countXY(metric, dimension, command):
+    SDate = "7daysAgo"
+    EDate = "today"
+    words = command.split(' ')
+    if 'from' in command:
+        pos = words.index('from')
+        SDate = command.split()[pos+1]
+    if 'to' in command:
+        pos = words.index('to')
+        EDate = command.split()[pos+1]
+    analytics = initialize_analyticsreporting()
+    response = analytics.reports().batchGet(
+        body={
+            'reportRequests': [
+            {
+                'viewId': VIEW_ID,
+                'dateRanges': [{'startDate': SDate, 'endDate': EDate}],
+                'metrics': [{'expression': 'ga:{}'.format(metric)}],
+                'dimensions': [{'name':'ga:{}'.format(dimension)}]
+
+            }]
+        }
+    ).execute()
+    answer = response['reports'][0]['data']['rows']
+    if not answer[0]['dimensions'][0].isdigit():
+        answer = sorted(answer, key=lambda x: float(x['metrics'][0]['values'][0]), reverse=True)
+    yArray=[]
+    for step in range(0, len(answer)):
+        yArray.append(float(answer[step]['metrics'][0]['values'][0]))
+
+    xArray=[]
+    for step in range(0, len(answer)):
+        xArray.append(answer[step]['dimensions'][0])
+
+    return xArray, yArray
+
 def handle_command(command, channel):
     """
         Executes bot command if the command is known
     """
-    # Default response is help text for the user
-    default_response = "Not sure what you mean. Try *{}*.".format(EXAMPLE_COMMAND)
+# Count command
+    elif command.startswith("count"):
+        metric = command.split()[1]
+        response = '`{} pageviews!`'.format(count(metric, command))
 
-    # Finds and executes the given command, filling in response
-    response = None
-    # This is where you start to implement more commands!
-    if command.startswith(EXAMPLE_COMMAND):
-        response = "Sure...write some more code then I can do that!"
+    # Graph command
+    elif command.split()[0] == 'graph':
+        if len(command.split())>1:
+            metric = command.split()[1]
+            words = command.split(' ')
+            if 'by' in command and len(command.split())>3:
+                pos = words.index('by')
+                dimension = command.split()[pos+1]
+                x, y=countXY(metric, dimension, command)
+                if not x[0].isdigit():
+                    my_xticks = [x[0], x[1], x[2], x[3], x[4],  x[5],  x[6]]
+                    my_xticks = [textwrap.fill(text,15) for text in my_xticks]
+                    x = np.array([0, 1, 2, 3, 4, 5, 6])
+                    plt.xticks(x, my_xticks, rotation=45)
+                    y = np.array([y[0], y[1], y[2], y[3], y[4], y[5], y[6]])
+                pl.plot(x, y, "r-") # plotting by columns
+                plt.ylim(ymin=0)
+                pl.grid(True, linestyle='-.')
+                plt.xlabel(dimension.capitalize())
+                plt.ylabel(metric.capitalize())
+                plt.title(metric.capitalize()+' by '+dimension.capitalize())
+                plt.tight_layout()
+                pl.savefig("graph.png")
+                slack_client.api_call('files.upload', channels=channel, filename='graph.png', file=open('graph.png', 'rb'))
+                pl.close()
+            else:
+                response='`What should {} be graphed by?`'.format(metric)
+        else:
+            response='`Graph what?`'
 
+    # Help command
+    elif command.split()[0] == 'help':
+        response = '`Count ____ (from ____ to ____)` \n`Graph ____[Metric] by ____[Dimension] (from ____ to ____)` \n`(Dates: today / yesterday / NdaysAgo / YYYY-MM-DD)` \n`(Metrics: pageviews / adsenserevenue / <https://developers.google.com/analytics/devguides/reporting/core/dimsmets|more...>)` \n`(Dimensions: day / source / author / <https://developers.google.com/analytics/devguides/reporting/core/dimsmets|more...>)`'
+        
     # Sends the response back to the channel
-    slack_client.api_call(
-        "chat.postMessage",
-        channel=channel,
-        text=response or default_response
-    )
+    slack_client.api_call("chat.postMessage", channel=channel,
+                          text=response, as_user=True)
 
 if __name__ == "__main__":
     if slack_client.rtm_connect(with_team_state=False):
