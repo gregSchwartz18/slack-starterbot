@@ -1,4 +1,6 @@
 # slack-starterbot
 A simple Python-powered starter Slack bot. Read 
-[the tutorial](https://www.fullstackpython.com/blog/build-first-slack-bot-python.html) 
+[the tutorial](https://www.fullstackpython.com/blog/build-first-slack-bot-python.html)
+and
+[my followup](https://www.twilio.com/blog/2018/03/google-analytics-slack-bot-python.html)
 for a full overview.
